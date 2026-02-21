@@ -1,3 +1,7 @@
 # Large medical image files
 *.nii
 *.nii.gz
+
+# Local AI config (contains API keys)
+ohif-modes/wisespine-extension-layout/src/components/aiConfig.ts
+node_modules/
