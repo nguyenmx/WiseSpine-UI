@@ -3,6 +3,7 @@ import { GEMINI_API_KEY, DEEPSEEK_API_KEY } from './aiConfig';
 import { fetchOllamaModels, streamOllama } from './OllamaProvider';
 import { DEEPSEEK_MODELS, streamDeepSeek } from './DeepSeekProvider';
 import type { ChatMessage } from './OllamaProvider';
+import VoiceInput from './VoiceInput';
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -49,6 +50,7 @@ export default function ChatController() {
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -347,27 +349,44 @@ export default function ChatController() {
             )}
           </div>
         )}
-        <div className="relative rounded-xl border border-gray-600 bg-gray-800 transition-all focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/30">
+        <div
+          className="relative rounded-xl border bg-gray-800 transition-all"
+          style={isVoiceListening
+            ? { borderColor: '#ef4444', boxShadow: '0 0 0 2px rgba(239,68,68,0.25)' }
+            : { borderColor: '#4b5563' }
+          }
+        >
           <textarea
             ref={textareaRef}
             className="w-full resize-none bg-transparent px-3 py-2 pb-10 text-sm text-white placeholder-gray-500 focus:outline-none"
             rows={3}
-            placeholder="Ask a question... (Enter to send, Shift+Enter for newline)"
+            placeholder={isVoiceListening ? '' : 'Ask a question... (Enter to send, Shift+Enter for newline)'}
             value={inputText}
             onChange={e => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             disabled={isLoading}
           />
-          <button
-            className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={handleSend}
-            disabled={isLoading || !inputText.trim() || !selectedModel}
-            title="Send"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
-              <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
-            </svg>
-          </button>
+
+          <div className="absolute bottom-2 right-2 flex items-center gap-1" style={{ zIndex: 2 }}>
+            <VoiceInput
+              onTranscript={setInputText}
+              onError={msg => setError(msg)}
+              onListeningChange={setIsVoiceListening}
+              disabled={isLoading}
+            />
+
+            {/* Send button */}
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleSend}
+              disabled={isLoading || !inputText.trim() || !selectedModel}
+              title="Send"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
+                <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
