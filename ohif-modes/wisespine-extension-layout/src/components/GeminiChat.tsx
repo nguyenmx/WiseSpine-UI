@@ -15,7 +15,9 @@ type Message = {
 };
 
 export default function GeminiChat() {
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') ?? '');
+  const [apiKey, setApiKey] = useState(
+    () => localStorage.getItem('gemini_api_key') || (process.env.GEMINI_API_KEY as string) || ''
+  );
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [selectedModel, setSelectedModel] = useState(MODELS[0]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -124,54 +126,56 @@ export default function GeminiChat() {
   };
 
   // API key entry screen
-  if (!apiKey) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 bg-black p-4 text-white">
-        <p className="text-center text-sm text-gray-400">
-          Enter your Gemini API key to start chatting.
-        </p>
-        <input
-          type="password"
-          className="w-full rounded bg-white px-2 py-1 text-sm text-black placeholder-gray-400 focus:outline-none"
-          placeholder="AIza..."
-          value={apiKeyInput}
-          onChange={e => setApiKeyInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') saveApiKey(); }}
-          autoFocus
-        />
-        <button
-          className="rounded bg-blue-700 px-4 py-1 text-sm text-white hover:bg-blue-600 disabled:opacity-50"
-          onClick={saveApiKey}
-          disabled={!apiKeyInput.trim()}
-        >
-          Save Key
-        </button>
-      </div>
-    );
-  }
+  // if (!apiKey) {
+  //   return (
+  //     <div className="flex h-full flex-col items-center justify-center gap-3 bg-black p-4 text-white">
+  //       <p className="text-center text-sm text-gray-400">
+  //         Enter your Gemini API key to start chatting.
+  //       </p>
+  //       <input
+  //         type="password"
+  //         className="w-full rounded bg-white px-2 py-1 text-sm text-black placeholder-gray-400 focus:outline-none"
+  //         placeholder="AIza..."
+  //         value={apiKeyInput}
+  //         onChange={e => setApiKeyInput(e.target.value)}
+  //         onKeyDown={e => { if (e.key === 'Enter') saveApiKey(); }}
+  //         autoFocus
+  //       />
+  //       <button
+  //         className="rounded bg-blue-700 px-4 py-1 text-sm text-white hover:bg-blue-600 disabled:opacity-50"
+  //         onClick={saveApiKey}
+  //         disabled={!apiKeyInput.trim()}
+  //       >
+  //         Save Key
+  //       </button>
+  //     </div>
+  //   );
+  // }
+
+  // return (
+  //   <div className="flex h-full flex-col bg-black text-white">
+  //     {/* Model selector + reset key */}
+  //     <div className="flex items-center gap-2 border-b border-gray-700 p-2">
+  //       <select
+  //         className="flex-1 rounded bg-white px-2 py-1 text-sm text-black"
+  //         value={selectedModel}
+  //         onChange={e => setSelectedModel(e.target.value)}
+  //       >
+  //         {MODELS.map(m => (
+  //           <option key={m} value={m}>{m}</option>
+  //         ))}
+  //       </select>
+  //       <button
+  //         className="text-xs text-gray-500 hover:text-gray-300"
+  //         onClick={() => { localStorage.removeItem('gemini_api_key'); setApiKey(''); }}
+  //         title="Reset API key"
+  //       >
+  //         Reset key
+  //       </button>
+  //     </div>
 
   return (
     <div className="flex h-full flex-col bg-black text-white">
-      {/* Model selector + reset key */}
-      <div className="flex items-center gap-2 border-b border-gray-700 p-2">
-        <select
-          className="flex-1 rounded bg-white px-2 py-1 text-sm text-black"
-          value={selectedModel}
-          onChange={e => setSelectedModel(e.target.value)}
-        >
-          {MODELS.map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-        <button
-          className="text-xs text-gray-500 hover:text-gray-300"
-          onClick={() => { localStorage.removeItem('gemini_api_key'); setApiKey(''); }}
-          title="Reset API key"
-        >
-          Reset key
-        </button>
-      </div>
-
       {/* Message history */}
       <div className="flex-1 space-y-2 overflow-y-auto p-2">
         {messages.length === 0 && !error && (
