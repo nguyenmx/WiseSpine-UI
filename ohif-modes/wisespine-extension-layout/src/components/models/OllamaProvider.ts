@@ -23,7 +23,8 @@ export async function streamOllama(
   systemPrompt: string,
   onStart: () => void,
   onToken: (token: string) => void,
-  imageBase64?: string | null
+  imageBase64?: string | null,
+  signal?: AbortSignal
 ): Promise<void> {
   const formattedMessages = messages.map((m, idx) => {
     const isLastUser = idx === messages.length - 1 && m.role === 'user';
@@ -36,6 +37,7 @@ export async function streamOllama(
   const response = await fetch(`${OLLAMA_BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       model,
       messages: [{ role: 'system', content: systemPrompt }, ...formattedMessages],

@@ -6,6 +6,7 @@ import { useAppConfig } from '@state';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { preserveQueryParameters } from '@ohif/app';
 import ChatController from '../components/ChatController';
+import { setViewportMeta } from '../components/viewportContext';
 
 const CHAT_TAB = {
   id: 'aiChat',
@@ -64,7 +65,7 @@ function WiseSpineLayoutComponent({
   rightPanelClosed = false,
 }) {
   const [appConfig] = useAppConfig();
-  const { panelService, hangingProtocolService } = servicesManager.services;
+  const { panelService, hangingProtocolService, viewportGridService, displaySetService } = servicesManager.services;
 
   const [showLoadingIndicator, setShowLoadingIndicator] = useState(
     appConfig.showLoadingIndicator
@@ -220,6 +221,39 @@ function WiseSpineLayoutComponent({
     );
     return () => unsubscribe();
   }, [hangingProtocolService]);
+
+  // Keep DICOM metadata bridge up to date when the active viewport changes
+  useEffect(() => {
+    if (!viewportGridService || !displaySetService) return;
+
+    const syncMeta = () => {
+      try {
+        const { activeViewportId, viewports } = viewportGridService.getState();
+        const activeViewport = viewports.get(activeViewportId);
+        const uid = activeViewport?.displaySetInstanceUIDs?.[0];
+        if (!uid) return;
+        const ds = displaySetService.getDisplaySetByUID(uid);
+        if (!ds) return;
+        setViewportMeta({
+          patientName: ds.PatientName ?? ds.patientName,
+          patientAge: ds.PatientAge ?? ds.patientAge,
+          patientSex: ds.PatientSex ?? ds.patientSex,
+          modality: ds.Modality ?? ds.modality,
+          bodyPartExamined: ds.BodyPartExamined ?? ds.bodyPartExamined,
+          studyDescription: ds.StudyDescription ?? ds.studyDescription,
+          seriesDescription: ds.SeriesDescription ?? ds.seriesDescription,
+          studyDate: ds.StudyDate ?? ds.studyDate,
+        });
+      } catch { /* silently ignore if services aren't ready */ }
+    };
+
+    const { unsubscribe } = viewportGridService.subscribe(
+      viewportGridService.EVENTS.ACTIVE_VIEWPORT_ID_CHANGED,
+      syncMeta
+    );
+    syncMeta(); // run once on mount
+    return () => unsubscribe();
+  }, [viewportGridService, displaySetService]);
 
   // Prevent body scrolling
   useEffect(() => {
