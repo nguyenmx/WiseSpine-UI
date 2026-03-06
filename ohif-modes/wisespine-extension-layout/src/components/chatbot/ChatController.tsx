@@ -1,15 +1,26 @@
+/**
+ * ChatController is the main component for the chatbot panel. 
+ * It manages the conversation state, handles user input
+ * and interfaces with the AI providers.
+ 
+ * 1. Captures the viewport and attaches it to the user message.
+ * 2. Routes to the correct AI provider based on the selected model.
+ * 3. Streams the response token by token into the chat bubble.
+ * 4. Renders the message history, model selector, and input bar.
+ */
 import React, { useState, useEffect, useRef } from 'react';
-import { GEMINI_API_KEY, DEEPSEEK_API_KEY } from './models/aiConfig';
-import { fetchOllamaModels, streamOllama } from './models/OllamaProvider';
-import { DEEPSEEK_MODELS, fetchDeepSeekModels, streamDeepSeek } from './models/DeepSeekProvider';
-import { GEMINI_MODELS, streamGemini } from './models/GeminiProvider';
+import { streamOllama } from '../models/OllamaProvider';
+import { streamDeepSeek } from '../models/DeepSeekProvider';
+import { GEMINI_MODELS, streamGemini } from '../models/GeminiProvider';
 import { getViewportMeta, formatViewportMeta } from './viewportContext';
-import type { ChatMessage } from './models/OllamaProvider';
+import type { ChatMessage } from '../models/OllamaProvider';
 import ThinkingIndicator from './ThinkingIndicator';
 import ChatInput from './ChatInput';
-import { getViewportDataUrl } from './imageCapture';
 import { useDragDrop } from './useDragDrop';
+import { resolveMessageImage } from './resolveImage';
+import { useModelSelector } from './useModelSelector';
 
+// Clinical base prompt — appended with live DICOM metadata from viewportContext on every send
 const BASE_PROMPT =
   'You are a clinical assistant embedded in a spine imaging viewer. ' +
   'Answer questions about radiology findings, spinal anatomy, pathology, and patient imaging clearly and concisely. ' +
@@ -20,55 +31,39 @@ const getSystemPrompt = () => BASE_PROMPT + formatViewportMeta(getViewportMeta()
 type Message = ChatMessage & { imageDataUrl?: string };
 
 export default function ChatController() {
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [deepSeekModels, setDeepSeekModels] = useState<string[]>(DEEPSEEK_MODELS);
-  const [modelFilter, setModelFilter] = useState<'all' | 'vision' | 'text'>('all');
-  const [selectedModel, setSelectedModel] = useState<string>(() => {
-    if (DEEPSEEK_API_KEY) return DEEPSEEK_MODELS[0];
-    if (GEMINI_API_KEY) return GEMINI_MODELS[0];
-    return '';
-  });
+  // Model list, selection, filter chips, and provider-type flags
+  const {
+    ollamaModels,
+    deepSeekModels,
+    modelFilter,
+    selectedModel,
+    setSelectedModel,
+    isGemini,
+    isDeepSeek,
+    supportsImages,
+    showOllama,
+    showDeepSeek,
+    showGemini,
+    allModels,
+    handleFilterChange,
+  } = useModelSelector();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
+  const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null); // explicit image override
   const [error, setError] = useState<string | null>(null);
   const { isDragOver, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(setPreviewDataUrl);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null); // lets us cancel in-flight requests
 
-  // Fetch Ollama + DeepSeek models on mount; fall back to cloud models if unavailable
-  useEffect(() => {
-    if (DEEPSEEK_API_KEY) {
-      fetchDeepSeekModels().then(setDeepSeekModels);
-    }
-
-    fetchOllamaModels()
-      .then(names => {
-        setOllamaModels(names);
-        if (names.length > 0) setSelectedModel(names[0]);
-        else if (DEEPSEEK_API_KEY) setSelectedModel(DEEPSEEK_MODELS[0]);
-        else if (GEMINI_API_KEY) setSelectedModel(GEMINI_MODELS[0]);
-      })
-      .catch(() => {
-        if (DEEPSEEK_API_KEY) setSelectedModel(DEEPSEEK_MODELS[0]);
-        else if (GEMINI_API_KEY) setSelectedModel(GEMINI_MODELS[0]);
-      });
-  }, []);
-
+  // Keep the message list scrolled to the bottom
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
   }, [messages, isLoading]);
 
-  const isGemini = selectedModel.startsWith('gemini-');
-  const isDeepSeek = selectedModel.startsWith('deepseek-') || selectedModel.startsWith('deepseek/');
-  const isOllama = !isGemini && !isDeepSeek;
-  const supportsImages = isGemini || isOllama;
-
-  // --- Shared streaming helpers ---
-
-  // Appends a token to the last message in state (used as onToken callback)
+  // Appends each streamed token to the last (assistant) bubble
   const appendToken = (token: string) => {
     setMessages(prev => {
       const updated = [...prev];
@@ -80,30 +75,18 @@ export default function ChatController() {
     });
   };
 
-  // Adds the empty assistant bubble and stops the "thinking" spinner (used as onStart callback)
+  // Called once the provider confirms the request — adds the empty assistant bubble
   const onStreamStart = () => {
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
     setIsLoading(false);
   };
 
-  // --- Main send handler (routes to the correct provider) ---
+  // Resolves the image, builds the user message, then routes to the correct provider
   const handleSend = async () => {
     const trimmed = inputText.trim();
     if (!trimmed || !selectedModel || isLoading) return;
 
-    let imageDataUrl: string | null = null;
-    let mimeType = 'image/jpeg';
-    if (supportsImages) {
-      if (previewDataUrl) {
-        imageDataUrl = previewDataUrl;
-        const match = previewDataUrl.match(/^data:(image\/\w+);base64,/);
-        if (match) mimeType = match[1];
-      } else {
-        imageDataUrl = await getViewportDataUrl();
-      }
-    }
-
-    const imageBase64 = imageDataUrl ? imageDataUrl.split(',')[1] : null;
+    const { imageDataUrl, imageBase64, mimeType } = await resolveMessageImage(supportsImages, previewDataUrl);
     const userMessage: Message = { role: 'user', content: trimmed, ...(imageDataUrl ? { imageDataUrl } : {}) };
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
@@ -130,28 +113,6 @@ export default function ChatController() {
     }
   };
 
-  const showOllama = modelFilter !== 'text' && ollamaModels.length > 0;
-  const showDeepSeek = modelFilter !== 'vision' && !!DEEPSEEK_API_KEY;
-  const showGemini = modelFilter !== 'text' && !!GEMINI_API_KEY;
-
-  const handleFilterChange = (f: 'all' | 'vision' | 'text') => {
-    setModelFilter(f);
-    const nextShowOllama = f !== 'text' && ollamaModels.length > 0;
-    const nextShowDeepSeek = f !== 'vision' && !!DEEPSEEK_API_KEY;
-    const nextShowGemini = f !== 'text' && !!GEMINI_API_KEY;
-    const selIsOllama = !selectedModel.startsWith('gemini-') && !selectedModel.startsWith('deepseek-') && !selectedModel.startsWith('deepseek/');
-    const selIsDeepSeek = selectedModel.startsWith('deepseek-') || selectedModel.startsWith('deepseek/');
-    const selIsGemini = selectedModel.startsWith('gemini-');
-    const stillVisible = (selIsOllama && nextShowOllama) || (selIsDeepSeek && nextShowDeepSeek) || (selIsGemini && nextShowGemini);
-    if (!stillVisible) {
-      if (nextShowOllama) setSelectedModel(ollamaModels[0]);
-      else if (nextShowDeepSeek) setSelectedModel(deepSeekModels[0]);
-      else if (nextShowGemini) setSelectedModel(GEMINI_MODELS[0]);
-    }
-  };
-
-  const allModels = showOllama || showDeepSeek || showGemini;
-
   return (
     <div
       className="relative flex h-full flex-col overflow-hidden bg-black text-white"
@@ -159,16 +120,15 @@ export default function ChatController() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Drop overlay */}
+      {/* Shown when the user drags an image over the panel */}
       {isDragOver && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded border-2 border-dashed border-blue-400 bg-blue-900/40">
           <span className="text-sm font-semibold text-blue-200">Drop image to attach</span>
         </div>
       )}
 
-      {/* Model selector */}
+      {/* Model selector — filter chips + dropdown */}
       <div className="border-b border-gray-700 p-2">
-        {/* Filter chips */}
         <div className="mb-1.5 flex gap-1">
           {(['all', 'vision', 'text'] as const).map(f => (
             <button
@@ -180,6 +140,7 @@ export default function ChatController() {
             </button>
           ))}
         </div>
+        {/* Switching model aborts any in-flight request and clears the conversation */}
         <select
           className="w-full rounded bg-white px-2 py-1 text-sm text-black"
           value={selectedModel}
@@ -230,6 +191,7 @@ export default function ChatController() {
 
         {messages.map((msg, i) => {
           const isUser = msg.role === 'user';
+          // Show the captured image inside the assistant bubble so the user can see what was sent
           const contextImage = !isUser ? (messages[i - 1] as Message | undefined)?.imageDataUrl : undefined;
           return (
             <div key={i} style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}>
@@ -261,6 +223,7 @@ export default function ChatController() {
           );
         })}
 
+        {/* Thinking indicator shown while waiting for the first token */}
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
             <div style={{ backgroundColor: '#1f2937', color: '#9ca3af', borderRadius: '1rem 1rem 1rem 0.25rem', padding: '0.5rem 0.75rem', fontSize: '0.875rem' }}>
@@ -275,6 +238,7 @@ export default function ChatController() {
         )}
       </div>
 
+      {/* Input bar — textarea, voice button, send button, image preview */}
       <ChatInput
         supportsImages={supportsImages}
         previewDataUrl={previewDataUrl}

@@ -1,4 +1,4 @@
-import WiseSpineLayoutComponent from './ViewerLayout/WiseSpineLayoutComponent';
+import WiseSpineLayoutComponent from './WiseSpineLayoutComponent';
 
 export default function getLayoutTemplateModule({ servicesManager, extensionManager, commandsManager, hotkeysManager }) {
   function WiseSpineLayoutWithServices(props) {

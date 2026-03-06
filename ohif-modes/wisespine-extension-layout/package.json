@@ -3,8 +3,8 @@
   "version": "0.0.1",
   "description": "Custom layout extension for WiseSpine mode",
   "license": "MIT",
-  "main": "src/index.js",
-  "module": "src/index.js",
+  "main": "src/ViewerLayout/index.js",
+  "module": "src/ViewerLayout/index.js",
   "engines": {
     "node": ">=14",
     "npm": ">=6",

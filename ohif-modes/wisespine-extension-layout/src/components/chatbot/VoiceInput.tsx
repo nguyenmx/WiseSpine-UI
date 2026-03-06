@@ -1,13 +1,15 @@
+/** No npm packages used — relies on two browser-native Web APIs:
+ *  navigator.mediaDevices.getUserMedia  (microphone permission prompt)
+ * window.SpeechRecognition / webkitSpeechRecognition  (speech-to-text)
+ * Supported in Chrome/Edge; Firefox does not support the Web Speech API.
+ */
+
 import React, { useState, useEffect, useRef } from 'react';
 
 interface Props {
-  /** Called with the latest transcript as the user speaks */
   onTranscript: (text: string) => void;
-  /** Called when a permission or API error occurs */
   onError: (msg: string) => void;
-  /** Called whenever the listening state changes */
   onListeningChange?: (listening: boolean) => void;
-  /** Disables the button (e.g. while the AI is responding) */
   disabled?: boolean;
 }
 

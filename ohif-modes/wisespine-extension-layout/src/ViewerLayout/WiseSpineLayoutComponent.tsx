@@ -5,8 +5,8 @@ import { Toolbar } from '@ohif/extension-default';
 import { useAppConfig } from '@state';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { preserveQueryParameters } from '@ohif/app';
-import ChatController from '../components/ChatController';
-import { setViewportMeta } from '../components/viewportContext';
+import ChatController from '../components/chatbot/ChatController';
+import { setViewportMeta } from '../components/chatbot/viewportContext';
 
 const CHAT_TAB = {
   id: 'aiChat',
