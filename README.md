@@ -6,15 +6,20 @@ A custom OHIF v3 medical imaging viewer with an integrated AI chat assistant, bu
 
 ## Repository Layout
 
-```
-WiseSpine/
-├── Viewers/                        — OHIF v3 monorepo (the main viewer app)
-├── ohif-modes/
-│   ├── wise-spine/                 — WiseSpine OHIF mode (route: /wiseSpine)
-│   └── wisespine-extension-layout/ — Custom layout extension + AI chatbot
-└── orthanc-setup-samples/
-    └── docker/ohif/                — Docker Compose stack (Orthanc + nginx)
-```
+| Folder | Purpose |
+|--------|---------|
+| `Viewers/` | OHIF v3 monorepo — the main viewer app and dev server |
+| `ohif-modes/wise-spine/` | WiseSpine mode definition (route: `/wiseSpine`) |
+| `ohif-modes/wisespine-extension-layout/` | Custom layout extension + AI chatbot |
+| `orthanc-setup-samples/docker/ohif/` | Docker Compose stack (Orthanc + nginx) |
+
+**Inside `wisespine-extension-layout/src/`:**
+
+| Folder | Purpose |
+|--------|---------|
+| `ViewerLayout/` | Layout component, OHIF entry point, template module |
+| `components/chatbot/` | AI chat panel — UI components, hooks, viewport bridge |
+| `components/models/` | AI provider modules (Gemini, DeepSeek, Ollama, OpenRouter) |
 
 ---
 
@@ -163,7 +168,7 @@ The AI Chat tab appears in the right side panel whenever a study is open.
 Create the AI config file (gitignored — must be created manually):
 
 ```
-ohif-modes/wisespine-extension-layout/src/components/aiConfig.ts
+ohif-modes/wisespine-extension-layout/src/components/models/aiConfig.ts
 ```
 
 ```ts
@@ -173,7 +178,7 @@ export const DEEPSEEK_API_KEY = 'your-deepseek-api-key'; // '' to disable
 
 Providers with a blank key are hidden from the model dropdown automatically.
 
-For full chatbot component documentation see [ohif-modes/wisespine-extension-layout/src/components/CHATBOT_README.md](ohif-modes/wisespine-extension-layout/src/components/CHATBOT_README.md).
+For full chatbot component documentation see [ohif-modes/wisespine-extension-layout/src/components/chatbot/README.md](ohif-modes/wisespine-extension-layout/src/components/chatbot/README.md).
 
 ---
 
@@ -218,5 +223,7 @@ Ollama must be started with `OLLAMA_ORIGINS=http://localhost:3000`. Without it t
 | `Viewers/platform/app/.webpack/webpack.pwa.js` | Dev server proxy rules |
 | `orthanc-setup-samples/docker/ohif/docker-compose.yml` | Docker stack (Orthanc + nginx + PostgreSQL) |
 | `ohif-modes/wise-spine/src/index.jsx` | WiseSpine mode definition |
-| `ohif-modes/wisespine-extension-layout/` | Custom layout extension + AI chatbot |
-| `ohif-modes/wisespine-extension-layout/src/components/aiConfig.ts` | API keys — **never commit** |
+| `ohif-modes/wisespine-extension-layout/src/ViewerLayout/` | Layout component, entry point, template module |
+| `ohif-modes/wisespine-extension-layout/src/components/chatbot/` | AI chat panel — UI, hooks, viewport bridge |
+| `ohif-modes/wisespine-extension-layout/src/components/models/` | AI provider modules (Gemini, DeepSeek, Ollama) |
+| `ohif-modes/wisespine-extension-layout/src/components/models/aiConfig.ts` | API keys — **never commit** |
