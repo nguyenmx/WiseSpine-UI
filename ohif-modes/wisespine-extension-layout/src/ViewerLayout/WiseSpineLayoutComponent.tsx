@@ -7,6 +7,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { preserveQueryParameters } from '@ohif/app';
 import ChatController from '../components/chatbot/ChatController';
 import { setViewportMeta } from '../components/chatbot/viewportContext';
+import AISegmentationPanel from '../components/segmentation/AISegmentationPanel';
 
 const CHAT_TAB = {
   id: 'aiChat',
@@ -71,6 +72,26 @@ function WiseSpineLayoutComponent({
     appConfig.showLoadingIndicator
   );
 
+  // AI Segmentation panel tab — injected with services at render time
+  const AISegPanelWithServices = useCallback(
+    () => (
+      <AISegmentationPanel
+        servicesManager={servicesManager}
+        extensionManager={extensionManager}
+      />
+    ),
+    [servicesManager, extensionManager]
+  );
+
+  const AI_SEG_TAB = {
+    id: 'aiSegmentation',
+    name: 'aiSegmentation',
+    label: 'AI Segment',
+    iconName: 'TabSegmentation',
+    iconLabel: 'AI Segment',
+    content: AISegPanelWithServices,
+  };
+
   // Panel state
   const hasPanels = useCallback(
     side => !!panelService.getPanels(side).length,
@@ -80,7 +101,7 @@ function WiseSpineLayoutComponent({
   const [hasLeftPanels, setHasLeftPanels] = useState(hasPanels('left'));
   const [hasRightPanels, setHasRightPanels] = useState(true);
   const [leftTabs, setLeftTabs] = useState(panelService.getPanels('left'));
-  const [rightTabs, setRightTabs] = useState([...panelService.getPanels('right'), CHAT_TAB]);
+  const [rightTabs, setRightTabs] = useState([...panelService.getPanels('right'), AI_SEG_TAB, CHAT_TAB]);
   const [leftExpanded, setLeftExpanded] = useState(!leftPanelClosed);
   const [rightExpanded, setRightExpanded] = useState(!rightPanelClosed);
   const [leftActiveTabIndex, setLeftActiveTabIndex] = useState(0);
@@ -176,7 +197,7 @@ function WiseSpineLayoutComponent({
         setHasLeftPanels(hasPanels('left'));
         setHasRightPanels(true);
         setLeftTabs(panelService.getPanels('left'));
-        setRightTabs([...panelService.getPanels('right'), CHAT_TAB]);
+        setRightTabs([...panelService.getPanels('right'), AI_SEG_TAB, CHAT_TAB]);
         if (options?.leftPanelClosed !== undefined) {
           setLeftExpanded(!options.leftPanelClosed);
         }
