@@ -3,7 +3,7 @@ DICOMweb utilities for the WiseSpine segmentation service.
 
 Handles:
   - Fetching a DICOM series from Orthanc via DICOMweb WADO-RS
-  - Converting TotalSegmentator NIfTI masks to a DICOM SEG object (highdicom)
+  - Converting a user-supplied NIfTI mask to a DICOM SEG object (highdicom)
   - Uploading the DICOM SEG back to Orthanc via STOW-RS
 """
 
@@ -121,115 +121,6 @@ _VERTEBRA_COLORS = [
     (200,  40, 140),  # magenta
 ]
 
-_SPINAL_CORD_COLOR = (255, 255, 100)   # bright yellow
-_SACRUM_COLOR      = (180, 100, 220)   # purple
-
-
-def _get_color(structure_name: str, index: int) -> tuple[int, int, int]:
-    if structure_name == "spinal_cord":
-        return _SPINAL_CORD_COLOR
-    if structure_name == "sacrum":
-        return _SACRUM_COLOR
-    return _VERTEBRA_COLORS[index % len(_VERTEBRA_COLORS)]
-
-
-def masks_to_dicom_seg(
-    ref_dcms: list[pydicom.Dataset],
-    masks: dict,   # { structure_name: Path(nii.gz) }
-    structure_labels: dict,  # { structure_name: human_label }
-) -> Segmentation:
-    """
-    Convert a dict of NIfTI segmentation masks to a single DICOM SEG object.
-
-    Args:
-        ref_dcms: List of reference DICOM datasets (the original CT series),
-                  sorted by InstanceNumber / slice position.
-        masks: Mapping from TotalSegmentator structure name to its NIfTI path.
-        structure_labels: Mapping from structure name to human-readable label.
-
-    Returns:
-        A highdicom Segmentation object ready to be serialised.
-    """
-    if not masks:
-        raise ValueError("No segmentation masks provided")
-
-    # Determine image dimensions from the reference DICOMs
-    rows = int(ref_dcms[0].Rows)
-    cols = int(ref_dcms[0].Columns)
-    n_slices = len(ref_dcms)
-
-    # Build a combined pixel array: shape (n_segments, n_slices, rows, cols)
-    sorted_names = sorted(masks.keys())
-    seg_pixel_array = np.zeros((len(sorted_names), n_slices, rows, cols), dtype=np.uint8)
-
-    for seg_idx, name in enumerate(sorted_names):
-        nifti_path = masks[name]
-        nii = nib.load(str(nifti_path))
-        data = nib.as_closest_canonical(nii).get_fdata().astype(np.uint8)
-
-        # TotalSegmentator output is (X, Y, Z); DICOM is (slices, rows, cols)
-        # Resample to match DICOM dimensions if needed
-        if data.shape != (cols, rows, n_slices):
-            # Use SimpleITK for resampling
-            sitk_mask = sitk.GetImageFromArray(data.transpose(2, 1, 0))
-            ref_size = (n_slices, rows, cols)
-            resampler = sitk.ResampleImageFilter()
-            resampler.SetSize([n_slices, cols, rows])
-            resampler.SetInterpolator(sitk.sitkNearestNeighbor)
-            sitk_resampled = resampler.Execute(sitk_mask)
-            data = sitk.GetArrayFromImage(sitk_resampled).astype(np.uint8)
-        else:
-            data = data.transpose(2, 1, 0)  # → (slices, rows, cols)
-
-        seg_pixel_array[seg_idx] = (data > 0).astype(np.uint8)
-
-    # Build SegmentDescription list
-    segment_descriptions = []
-    for seg_idx, name in enumerate(sorted_names):
-        label = structure_labels.get(name, name.replace("_", " ").title())
-        color = _get_color(name, seg_idx)
-
-        desc = SegmentDescription(
-            segment_number=seg_idx + 1,
-            segment_label=label,
-            segmented_property_category=CodedConcept(
-                value="123037004",
-                scheme_designator="SCT",
-                meaning="Body Structure",
-            ),
-            segmented_property_type=CodedConcept(
-                value="113225006",
-                scheme_designator="SCT",
-                meaning=label,
-            ),
-            algorithm_type=hd.seg.SegmentAlgorithmTypeValues.AUTOMATIC,
-            algorithm_identification=hd.AlgorithmIdentificationSequence(
-                name="TotalSegmentator",
-                version="2.x",
-                family=CodedConcept("123109006", "SCT", "Segmentation Algorithm"),
-            ),
-            recommended_display_rgb_value=color,
-        )
-        segment_descriptions.append(desc)
-
-    seg = Segmentation(
-        source_images=ref_dcms,
-        pixel_array=seg_pixel_array,
-        segmentation_type=SegmentationTypeValues.BINARY,
-        segment_descriptions=segment_descriptions,
-        series_instance_uid=hd.UID(),
-        sop_instance_uid=hd.UID(),
-        series_number=900,
-        instance_number=1,
-        manufacturer="WiseSpine",
-        manufacturer_model_name="TotalSegmentator",
-        software_versions="2.x",
-        device_serial_number="WS-001",
-    )
-
-    return seg
-
-
 # ─── STOW-RS upload ───────────────────────────────────────────────────────────
 
 def store_dicom_seg(seg: Segmentation) -> str:
@@ -256,3 +147,110 @@ def store_dicom_seg(seg: Segmentation) -> str:
     r.raise_for_status()
 
     return str(seg.SeriesInstanceUID)
+
+
+def store_dicom_seg_bytes(dicom_bytes: bytes) -> str:
+    """
+    Upload a raw DICOM SEG file (bytes) directly to Orthanc via STOW-RS.
+
+    Used for the mask-upload path when the user provides a .dcm file.
+    Returns the SeriesInstanceUID extracted from the uploaded file.
+    """
+    boundary = uuid.uuid4().hex
+
+    body = (
+        f"--{boundary}\r\n"
+        f"Content-Type: application/dicom\r\n\r\n"
+    ).encode() + dicom_bytes + f"\r\n--{boundary}--\r\n".encode()
+
+    headers = {
+        "Content-Type": f"multipart/related; type=\"application/dicom\"; boundary={boundary}",
+        "Accept": "application/json",
+    }
+
+    url = f"{DICOMWEB_BASE}/studies"
+    r = httpx.post(url, content=body, headers=headers, timeout=120)
+    r.raise_for_status()
+
+    # Extract SeriesInstanceUID from the uploaded file
+    ds = pydicom.dcmread(io.BytesIO(dicom_bytes), stop_before_pixels=True)
+    return str(getattr(ds, "SeriesInstanceUID", ""))
+
+
+def label_nifti_to_dicom_seg(
+    ref_dcms: list[pydicom.Dataset],
+    label_path: Path,
+) -> Segmentation:
+    """
+    Convert a user-supplied integer-label NIfTI mask to a DICOM SEG object.
+
+    Each unique non-zero integer in the NIfTI becomes one segment.
+    Labels are named "Segment N" unless they match a known vertebra value.
+
+    Args:
+        ref_dcms: Reference DICOM datasets (original CT series), sorted by InstanceNumber.
+        label_path: Path to the label NIfTI (.nii or .nii.gz).
+    """
+    rows     = int(ref_dcms[0].Rows)
+    cols     = int(ref_dcms[0].Columns)
+    n_slices = len(ref_dcms)
+
+    nii      = nib.load(str(label_path))
+    nii      = nib.as_closest_canonical(nii)
+    data     = nii.get_fdata().astype(np.int32)   # (X, Y, Z)
+    data     = data.transpose(2, 1, 0)             # → (slices, rows, cols)
+
+    # Resample to DICOM grid if needed
+    if data.shape != (n_slices, rows, cols):
+        sitk_label = sitk.GetImageFromArray(data.astype(np.float32))
+        resampler  = sitk.ResampleImageFilter()
+        resampler.SetSize([cols, rows, n_slices])
+        resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+        data = sitk.GetArrayFromImage(resampler.Execute(sitk_label)).astype(np.int32)
+
+    unique_labels = sorted(v for v in np.unique(data).tolist() if v > 0)
+    if not unique_labels:
+        raise RuntimeError("NIfTI mask contains no labelled voxels (all background).")
+
+    seg_pixel_array = np.zeros(
+        (len(unique_labels), n_slices, rows, cols), dtype=np.uint8
+    )
+    segment_descriptions = []
+
+    for seg_idx, lv in enumerate(unique_labels):
+        seg_pixel_array[seg_idx] = (data == lv).astype(np.uint8)
+        label_name = f"Segment {lv}"
+        color      = _VERTEBRA_COLORS[seg_idx % len(_VERTEBRA_COLORS)]
+
+        desc = SegmentDescription(
+            segment_number=seg_idx + 1,
+            segment_label=label_name,
+            segmented_property_category=CodedConcept(
+                value="123037004",
+                scheme_designator="SCT",
+                meaning="Body Structure",
+            ),
+            segmented_property_type=CodedConcept(
+                value="113225006",
+                scheme_designator="SCT",
+                meaning=label_name,
+            ),
+            algorithm_type=hd.seg.SegmentAlgorithmTypeValues.MANUAL,
+            recommended_display_rgb_value=color,
+        )
+        segment_descriptions.append(desc)
+
+    return Segmentation(
+        source_images=ref_dcms,
+        pixel_array=seg_pixel_array,
+        segmentation_type=SegmentationTypeValues.BINARY,
+        segment_descriptions=segment_descriptions,
+        series_instance_uid=hd.UID(),
+        sop_instance_uid=hd.UID(),
+        series_number=902,
+        instance_number=1,
+        manufacturer="WiseSpine",
+        manufacturer_model_name="User Upload",
+        software_versions="1.0",
+        device_serial_number="WS-003",
+    )

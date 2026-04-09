@@ -14,8 +14,8 @@ export type SegStatus =
 export interface SegState {
   status: SegStatus;
   message: string;
-  stage: string;          // fetch | segment | convert | upload | done
-  elapsedSeconds: number; // seconds since job started (server-reported + client ticker)
+  stage: string;          // fetch | convert | upload | done
+  elapsedSeconds: number;
   segments: string[];
   error: string | null;
 }
@@ -30,26 +30,89 @@ export function useAISegmentation({ servicesManager, extensionManager }: any) {
     error: null,
   });
 
-  const pollTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const tickTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const jobStartRef   = useRef<number>(0);   // client-side start timestamp (ms)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tickTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jobStartRef  = useRef<number>(0);
 
   const stopPolling = () => {
-    if (pollTimerRef.current)  { clearInterval(pollTimerRef.current);  pollTimerRef.current  = null; }
-    if (tickTimerRef.current)  { clearInterval(tickTimerRef.current);  tickTimerRef.current  = null; }
+    if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
+    if (tickTimerRef.current) { clearInterval(tickTimerRef.current); tickTimerRef.current = null; }
   };
 
-  // Clean up timers on unmount
   useEffect(() => () => stopPolling(), []);
 
-  const runSegmentation = useCallback(async () => {
+  const _startPolling = useCallback((jobId: string, StudyInstanceUID: string, endpoint: string) => {
+    jobStartRef.current = Date.now();
+
+    // 1-second client-side elapsed ticker
+    tickTimerRef.current = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - jobStartRef.current) / 1000);
+      setState(s => (s.status === 'running' ? { ...s, elapsedSeconds: elapsed } : s));
+    }, 1000);
+
+    // 5-second server poll
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${SEG_SERVICE_BASE}/${endpoint}/${jobId}`);
+        if (!res.ok) return;
+        const job = await res.json();
+
+        if (job.status === 'running' || job.status === 'queued') {
+          setState(s => ({
+            ...s,
+            message: job.message || s.message,
+            stage: job.stage || s.stage,
+            elapsedSeconds: Math.max(
+              job.elapsed_seconds ?? 0,
+              Math.floor((Date.now() - jobStartRef.current) / 1000)
+            ),
+          }));
+          return;
+        }
+
+        stopPolling();
+
+        if (job.status === 'error') {
+          setState({ status: 'error', message: '', stage: '', elapsedSeconds: job.elapsed_seconds ?? 0, segments: [], error: job.message || 'Upload failed.' });
+          return;
+        }
+
+        if (job.status === 'completed') {
+          setState(s => ({ ...s, status: 'loading', message: 'Loading segmentation into viewer…', elapsedSeconds: job.elapsed_seconds ?? s.elapsedSeconds }));
+          try {
+            const [dataSource] = extensionManager.getActiveDataSource();
+            await dataSource.retrieve.series.metadata({ StudyInstanceUID });
+          } catch {
+            // Non-fatal
+          }
+          setState({
+            status: 'done',
+            message: 'Mask loaded successfully!',
+            stage: 'done',
+            elapsedSeconds: job.elapsed_seconds ?? 0,
+            segments: job.segments ?? [],
+            error: null,
+          });
+          servicesManager.services.uiNotificationService?.show?.({
+            title: 'Segmentation',
+            message: 'Mask uploaded and ready in the viewer.',
+            type: 'success',
+            duration: 5000,
+          });
+        }
+      } catch {
+        // Silently retry
+      }
+    }, POLL_INTERVAL_MS);
+  }, [servicesManager, extensionManager]);
+
+  const uploadMask = useCallback(async (file: File) => {
     const {
       viewportGridService,
       displaySetService,
-      uiNotificationService,
     } = servicesManager.services;
 
-    // ── 1. Get active study/series UIDs ──────────────────────────────────────
+    // Get active series UIDs from viewport
     const { activeViewportId, viewports } = viewportGridService.getState();
     const activeViewport = viewports.get(activeViewportId);
     const displaySetUID = activeViewport?.displaySetInstanceUIDs?.[0];
@@ -71,15 +134,18 @@ export function useAISegmentation({ servicesManager, extensionManager }: any) {
       return;
     }
 
-    // ── 2. Submit job ─────────────────────────────────────────────────────────
-    setState({ status: 'submitting', message: 'Submitting segmentation job…', stage: 'queued', elapsedSeconds: 0, segments: [], error: null });
+    setState({ status: 'submitting', message: 'Uploading mask file…', stage: 'queued', elapsedSeconds: 0, segments: [], error: null });
 
     let jobId: string;
     try {
-      const res = await fetch(`${SEG_SERVICE_BASE}/segment`, {
+      const formData = new FormData();
+      formData.append('file', file, file.name);
+      formData.append('studyInstanceUID', StudyInstanceUID);
+      formData.append('seriesInstanceUID', SeriesInstanceUID);
+
+      const res = await fetch(`${SEG_SERVICE_BASE}/upload`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ studyInstanceUID: StudyInstanceUID, seriesInstanceUID: SeriesInstanceUID }),
+        body: formData,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -88,80 +154,18 @@ export function useAISegmentation({ servicesManager, extensionManager }: any) {
       const data = await res.json();
       jobId = data.job_id;
     } catch (err: any) {
-      setState({ status: 'error', message: '', stage: '', elapsedSeconds: 0, segments: [], error: `Failed to start job: ${err.message}` });
+      setState({ status: 'error', message: '', stage: '', elapsedSeconds: 0, segments: [], error: `Upload failed: ${err.message}` });
       return;
     }
 
-    jobStartRef.current = Date.now();
-    setState(s => ({ ...s, status: 'running', message: 'TotalSegmentator running on CPU…', stage: 'fetch' }));
-
-    // ── 3a. Client-side elapsed-time ticker (updates every second) ────────────
-    tickTimerRef.current = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - jobStartRef.current) / 1000);
-      setState(s => (s.status === 'running' ? { ...s, elapsedSeconds: elapsed } : s));
-    }, 1000);
-
-    // ── 3b. Poll server for status changes (every 5s) ─────────────────────────
-    pollTimerRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`${SEG_SERVICE_BASE}/segment/${jobId}`);
-        if (!res.ok) return;
-        const job = await res.json();
-
-        if (job.status === 'running' || job.status === 'queued') {
-          setState(s => ({
-            ...s,
-            message: job.message || s.message,
-            stage: job.stage || s.stage,
-            // Use server elapsed as floor so after a restart the number is still sensible
-            elapsedSeconds: Math.max(job.elapsed_seconds ?? 0, Math.floor((Date.now() - jobStartRef.current) / 1000)),
-          }));
-          return;
-        }
-
-        stopPolling();
-
-        if (job.status === 'error') {
-          setState({ status: 'error', message: '', stage: '', elapsedSeconds: job.elapsed_seconds ?? 0, segments: [], error: job.message || 'Segmentation failed.' });
-          return;
-        }
-
-        if (job.status === 'completed') {
-          // ── 4. Reload study metadata so OHIF picks up the new DICOM SEG ──
-          setState(s => ({ ...s, status: 'loading', message: 'Loading segmentation into viewer…', elapsedSeconds: job.elapsed_seconds ?? s.elapsedSeconds }));
-          try {
-            const [dataSource] = extensionManager.getActiveDataSource();
-            await dataSource.retrieve.series.metadata({ StudyInstanceUID });
-          } catch {
-            // Non-fatal — user can manually refresh
-          }
-
-          setState({
-            status: 'done',
-            message: 'Segmentation complete! Check the Segmentation panel.',
-            stage: 'done',
-            elapsedSeconds: job.elapsed_seconds ?? 0,
-            segments: job.segments ?? [],
-            error: null,
-          });
-
-          uiNotificationService?.show?.({
-            title: 'AI Segmentation',
-            message: `Segmentation ready — ${(job.segments ?? []).length} structures found.`,
-            type: 'success',
-            duration: 5000,
-          });
-        }
-      } catch {
-        // Silently retry on network glitch
-      }
-    }, POLL_INTERVAL_MS);
-  }, [servicesManager, extensionManager]);
+    setState(s => ({ ...s, status: 'running', message: 'Processing mask…', stage: 'fetch' }));
+    _startPolling(jobId, StudyInstanceUID, 'upload');
+  }, [servicesManager, extensionManager, _startPolling]);
 
   const reset = useCallback(() => {
     stopPolling();
     setState({ status: 'idle', message: '', stage: '', elapsedSeconds: 0, segments: [], error: null });
   }, []);
 
-  return { state, runSegmentation, reset };
+  return { state, uploadMask, reset };
 }
